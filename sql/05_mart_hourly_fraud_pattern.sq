@@ -1,0 +1,46 @@
+BEGIN;
+
+CREATE SCHEMA IF NOT EXISTS mart;
+
+DROP TABLE IF EXISTS mart.mart_hourly_fraud_pattern;
+
+CREATE TABLE mart.mart_hourly_fraud_pattern AS
+WITH base AS (
+    SELECT
+        EXTRACT(DOW FROM transaction_time)::int AS day_of_week,
+        EXTRACT(HOUR FROM transaction_time)::int AS hour_of_day,
+        amount,
+        target
+    FROM raw.raw_transactions
+),
+agg AS (
+    SELECT
+        day_of_week,
+        hour_of_day,
+        COUNT(*) AS tx_total,
+        SUM(CASE WHEN target = 1 THEN 1 ELSE 0 END) AS fraud_cnt,
+        ROUND(
+            (SUM(CASE WHEN target = 1 THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*), 0)) * 100,
+            4
+        ) AS fraud_rate_pct,
+        SUM(amount) AS amount_total,
+        SUM(CASE WHEN target = 1 THEN amount ELSE 0 END) AS amount_fraud
+    FROM base
+    GROUP BY day_of_week, hour_of_day
+)
+SELECT
+    day_of_week,
+    hour_of_day,
+    tx_total,
+    fraud_cnt,
+    fraud_rate_pct,
+    ROUND(amount_total::numeric, 2) AS amount_total,
+    ROUND(amount_fraud::numeric, 2) AS amount_fraud,
+    ROUND((amount_fraud::numeric / NULLIF(amount_total, 0)) * 100, 4) AS fraud_amount_share_pct
+FROM agg
+ORDER BY day_of_week, hour_of_day;
+
+CREATE INDEX IF NOT EXISTS ix_mart_hourly_fraud_pattern_time
+    ON mart.mart_hourly_fraud_pattern (day_of_week, hour_of_day);
+
+COMMIT;
