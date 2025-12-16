@@ -8,20 +8,29 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
 
+
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
 
     AIRFLOW_CONN_POSTGRES_DWH: postgresql://dwh:dwh@postgres-dwh:5432/dwh
 
     AIRFLOW__CORE__DEFAULT_TIMEZONE: Europe/Rome
+
+    _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/requirements.txt"
+
   volumes:
     - ./dags:/opt/airflow/dags
     - ./sql:/opt/airflow/sql
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    - ./requirements.txt:/opt/airflow/requirements.txt
+
   user: "${AIRFLOW_UID:-50000}:0"
+
   depends_on:
     postgres-airflow:
       condition: service_healthy
+    dwh-init:
+      condition: service_completed_successfully
 
 services:
   postgres-airflow:
@@ -40,7 +49,7 @@ services:
       - postgres_airflow_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-
+      
   postgres-dwh:
     image: postgres:16
     container_name: postgres-dwh
@@ -58,52 +67,10 @@ services:
     ports:
       - "5433:5432"
 
-  airflow-init:
-    <<: *airflow-common
-    container_name: airflow-init
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        set -e
-        airflow db migrate
-        airflow users create \
-          --username admin \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@example.com \
-          --password admin
-    depends_on:
-      postgres-airflow:
-        condition: service_healthy
-
-  airflow-webserver:
-    <<: *airflow-common
-    container_name: airflow-webserver
-    command: webserver
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 20
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-scheduler:
-    <<: *airflow-common
-    container_name: airflow-scheduler
-    command: scheduler
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-
   dwh-init:
     image: postgres:16
     container_name: dwh-init
+    restart: "no"
     depends_on:
       postgres-dwh:
         condition: service_healthy
@@ -127,10 +94,54 @@ services:
         fi
 
         echo "==> Loading train.csv into raw.raw_transactions..."
-
         psql -h postgres-dwh -U dwh -d dwh -c "\copy raw.raw_transactions FROM '/data/train.csv' WITH (FORMAT csv, HEADER true)"
 
         echo "==> Done. DWH is ready."
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      dwh-init:
+        condition: service_completed_successfully
+        
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
 
 volumes:
   postgres_airflow_data:
