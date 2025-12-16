@@ -1,0 +1,137 @@
+version: "3.8"
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+
+    AIRFLOW_CONN_POSTGRES_DWH: postgresql://dwh:dwh@postgres-dwh:5432/dwh
+
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Europe/Rome
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./sql:/opt/airflow/sql
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+
+services:
+  postgres-airflow:
+    image: postgres:16
+    container_name: postgres-airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_airflow_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  postgres-dwh:
+    image: postgres:16
+    container_name: postgres-dwh
+    environment:
+      POSTGRES_USER: dwh
+      POSTGRES_PASSWORD: dwh
+      POSTGRES_DB: dwh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dwh -d dwh"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_dwh_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  dwh-init:
+    image: postgres:16
+    container_name: dwh-init
+    depends_on:
+      postgres-dwh:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: dwh
+    volumes:
+      - ./initdb:/initdb
+      - ./data:/data
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+
+        echo "==> Creating raw table..."
+        psql -h postgres-dwh -U dwh -d dwh -f /initdb/00_create_raw_table.sql
+
+        if [ ! -f /data/train.csv ]; then
+          echo "ERROR: /data/train.csv not found. Put train.csv into ./data/train.csv"
+          exit 1
+        fi
+
+        echo "==> Loading train.csv into raw.raw_transactions..."
+
+        psql -h postgres-dwh -U dwh -d dwh -c "\copy raw.raw_transactions FROM '/data/train.csv' WITH (FORMAT csv, HEADER true)"
+
+        echo "==> Done. DWH is ready."
+
+volumes:
+  postgres_airflow_data:
+  postgres_dwh_data:
