@@ -8,7 +8,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
 
-
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
 
     AIRFLOW_CONN_POSTGRES_DWH: postgresql://dwh:dwh@postgres-dwh:5432/dwh
@@ -48,8 +47,8 @@ services:
     volumes:
       - postgres_airflow_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
-      
+      - "5434:5432"
+
   postgres-dwh:
     image: postgres:16
     container_name: postgres-dwh
@@ -119,7 +118,7 @@ services:
         condition: service_healthy
       dwh-init:
         condition: service_completed_successfully
-        
+
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow-webserver
